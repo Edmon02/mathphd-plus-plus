@@ -1,0 +1,91 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "mathphd-plus-plus"
+version = "0.1.0"
+description = "A T4-trainable mathematical reasoning LLM with GRPO, MCTS, and multi-agent debate"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Edmon02"},
+]
+keywords = [
+    "machine-learning",
+    "mathematics",
+    "reinforcement-learning",
+    "theorem-proving",
+    "language-model",
+    "GRPO",
+    "MCTS",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+
+dependencies = [
+    "torch>=2.1.0",
+    "transformers>=4.40.0",
+    "datasets>=2.19.0",
+    "peft>=0.10.0",
+    "bitsandbytes>=0.43.0",
+    "trl>=0.8.0",
+    "accelerate>=0.29.0",
+    "sympy>=1.12",
+    "numpy>=1.24.0",
+    "scipy>=1.11.0",
+    "tqdm",
+    "pyyaml",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "black",
+    "ruff",
+    "mypy",
+]
+wandb = [
+    "wandb",
+]
+full = [
+    "wandb",
+    "sentencepiece",
+    "protobuf",
+    "einops",
+    "tiktoken",
+    "datasketch",
+]
+
+[project.urls]
+Homepage = "https://github.com/Edmon02/mathphd-plus-plus"
+Repository = "https://github.com/Edmon02/mathphd-plus-plus"
+Issues = "https://github.com/Edmon02/mathphd-plus-plus/issues"
+
+[tool.setuptools.packages.find]
+include = ["mathphd_plus_plus*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
