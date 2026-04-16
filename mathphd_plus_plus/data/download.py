@@ -43,9 +43,11 @@ def download_sft_data(cache_dir: str = "./data_cache"):
 
     print("[SFT] Downloading MATH...")
     datasets_dict["math_train"] = load_dataset(
-        "hendrycks/competition_math",
+        "lighteval/MATH",
+        "all",
         split="train",
         cache_dir=cache_dir,
+        trust_remote_code=True,
     )
 
     print("[SFT] Downloading GSM8K...")
@@ -83,9 +85,11 @@ def download_eval_data(cache_dir: str = "./data_cache"):
 
     print("[EVAL] Downloading MATH test...")
     eval_datasets["math_test"] = load_dataset(
-        "hendrycks/competition_math",
+        "lighteval/MATH",
+        "all",
         split="test",
         cache_dir=cache_dir,
+        trust_remote_code=True,
     )
 
     print("[EVAL] Downloading GSM8K test...")
