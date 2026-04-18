@@ -37,8 +37,8 @@ class CPTConfig:
     target_tokens: int = 500_000_000  # 500M tokens subset
 
     # Training
-    per_device_train_batch_size: int = 2
-    gradient_accumulation_steps: int = 8  # effective batch = 16
+    per_device_train_batch_size: int = 1
+    gradient_accumulation_steps: int = 16  # effective batch = 16
     learning_rate: float = 2e-5
     lr_scheduler_type: str = "cosine"
     warmup_ratio: float = 0.05
@@ -72,8 +72,8 @@ class SFTConfig:
     })
 
     # Training
-    per_device_train_batch_size: int = 4
-    gradient_accumulation_steps: int = 4  # effective batch = 16
+    per_device_train_batch_size: int = 1
+    gradient_accumulation_steps: int = 16  # effective batch = 16
     learning_rate: float = 1e-5
     lr_scheduler_type: str = "cosine"
     warmup_ratio: float = 0.03
@@ -100,8 +100,8 @@ class PRMConfig:
     max_seq_length: int = 1024
 
     # Training
-    per_device_train_batch_size: int = 8
-    gradient_accumulation_steps: int = 2  # effective batch = 16
+    per_device_train_batch_size: int = 2
+    gradient_accumulation_steps: int = 8  # effective batch = 16
     learning_rate: float = 5e-6
     lr_scheduler_type: str = "cosine"
     warmup_ratio: float = 0.05
