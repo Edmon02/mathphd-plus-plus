@@ -4,6 +4,7 @@ Fine-tunes the CPT model on structured math instruction data.
 """
 
 import os
+import torch
 from typing import Optional
 from transformers import (
     Trainer,
@@ -43,6 +44,12 @@ def run_sft(
     if config is None:
         config = SFTConfig()
 
+    # Detect model dtype — only use fp16 mixed precision if model is in fp32
+    model_dtype = next(model.parameters()).dtype
+    use_fp16 = config.fp16 and model_dtype != torch.float16
+    if not use_fp16 and config.fp16:
+        print(f"  [NOTE] Model is already {model_dtype}, disabling fp16 GradScaler")
+
     training_args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=config.num_train_epochs,
@@ -52,7 +59,7 @@ def run_sft(
         lr_scheduler_type=config.lr_scheduler_type,
         warmup_ratio=config.warmup_ratio,
         weight_decay=config.weight_decay,
-        fp16=config.fp16,
+        fp16=use_fp16,
         bf16=config.bf16,
         gradient_checkpointing=True,
         save_steps=config.save_steps,

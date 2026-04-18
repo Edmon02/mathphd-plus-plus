@@ -41,7 +41,7 @@ def load_tokenizer(
 
 def load_model(
     model_name: str = "Qwen/Qwen2.5-0.5B",
-    torch_dtype: str = "float16",
+    torch_dtype: str = "float32",
     gradient_checkpointing: bool = True,
     device_map: str = "auto",
     quantization: Optional[str] = None,  # None, "4bit", "8bit"

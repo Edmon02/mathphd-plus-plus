@@ -80,6 +80,10 @@ def run_cpt(
     if config is None:
         config = CPTConfig()
 
+    # Detect model dtype — only use fp16 mixed precision if model is in fp32
+    model_dtype = next(model.parameters()).dtype
+    use_fp16 = config.fp16 and model_dtype != torch.float16
+
     training_args = TrainingArguments(
         output_dir=output_dir,
         num_train_epochs=config.num_train_epochs,
@@ -89,7 +93,7 @@ def run_cpt(
         lr_scheduler_type=config.lr_scheduler_type,
         warmup_ratio=config.warmup_ratio,
         weight_decay=config.weight_decay,
-        fp16=config.fp16,
+        fp16=use_fp16,
         bf16=config.bf16,
         gradient_checkpointing=True,
         save_steps=config.save_steps,
