@@ -11,7 +11,7 @@ from typing import Optional, List
 class ModelConfig:
     """Base model configuration."""
     model_name: str = "Qwen/Qwen2.5-0.5B"
-    torch_dtype: str = "float16"  # T4 doesn't support bf16
+    torch_dtype: str = "float32"  # Load in fp32; fp16 mixed precision handled by TrainingArguments
     use_flash_attention: bool = False  # T4 doesn't support flash-attn2
     gradient_checkpointing: bool = True
     max_seq_length: int = 2048
