@@ -62,7 +62,7 @@ class CPTConfig:
 class SFTConfig:
     """Stage 2: Supervised Fine-Tuning configuration."""
     # Data
-    max_seq_length: int = 1024
+    max_seq_length: int = 512
     sft_data_mix: dict = field(default_factory=lambda: {
         "meta-math/MetaMathQA": 40_000,
         "hendrycks/competition_math": -1,  # all 7.5K
@@ -72,13 +72,13 @@ class SFTConfig:
     })
 
     # Training
-    per_device_train_batch_size: int = 1
-    gradient_accumulation_steps: int = 16  # effective batch = 16
+    per_device_train_batch_size: int = 2
+    gradient_accumulation_steps: int = 8  # effective batch = 16
     learning_rate: float = 1e-5
     lr_scheduler_type: str = "cosine"
     warmup_ratio: float = 0.03
     weight_decay: float = 0.01
-    num_train_epochs: int = 3
+    num_train_epochs: int = 2
     fp16: bool = True
     bf16: bool = False
 
