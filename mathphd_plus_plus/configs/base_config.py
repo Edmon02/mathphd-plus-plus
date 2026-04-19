@@ -41,7 +41,7 @@ class CPTConfig:
     gradient_accumulation_steps: int = 16  # effective batch = 16
     learning_rate: float = 2e-5
     lr_scheduler_type: str = "cosine"
-    warmup_ratio: float = 0.05
+    warmup_steps: float = 0.05
     weight_decay: float = 0.01
     num_train_epochs: int = 1
     fp16: bool = True
@@ -76,7 +76,7 @@ class SFTConfig:
     gradient_accumulation_steps: int = 8  # effective batch = 16
     learning_rate: float = 1e-5
     lr_scheduler_type: str = "cosine"
-    warmup_ratio: float = 0.03
+    warmup_steps: float = 0.03
     weight_decay: float = 0.01
     num_train_epochs: int = 2
     fp16: bool = True
@@ -104,7 +104,7 @@ class PRMConfig:
     gradient_accumulation_steps: int = 8  # effective batch = 16
     learning_rate: float = 5e-6
     lr_scheduler_type: str = "cosine"
-    warmup_ratio: float = 0.05
+    warmup_steps: float = 0.05
     weight_decay: float = 0.01
     num_train_epochs: int = 2
     fp16: bool = True

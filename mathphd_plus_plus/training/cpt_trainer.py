@@ -91,7 +91,7 @@ def run_cpt(
         gradient_accumulation_steps=config.gradient_accumulation_steps,
         learning_rate=config.learning_rate,
         lr_scheduler_type=config.lr_scheduler_type,
-        warmup_ratio=config.warmup_ratio,
+        warmup_steps=config.warmup_steps,
         weight_decay=config.weight_decay,
         fp16=use_fp16,
         bf16=config.bf16,
