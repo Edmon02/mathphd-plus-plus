@@ -63,8 +63,12 @@ class GRPOTrainer:
             weight_decay=0.01,
         )
 
-        # Mixed precision
-        self.scaler = torch.amp.GradScaler('cuda') if self.config.fp16 else None
+        # Mixed precision — only use GradScaler if model is in fp32
+        model_dtype = next(self.model.parameters()).dtype
+        self.use_fp16 = self.use_fp16 and model_dtype != torch.float16
+        if not self.use_fp16 and self.use_fp16:
+            print(f"  [NOTE] Model is already {model_dtype}, disabling fp16 GradScaler")
+        self.scaler = torch.amp.GradScaler('cuda') if self.use_fp16 else None
 
         # Logging
         self.logger = MetricsLogger(use_wandb=bool(os.environ.get("WANDB_API_KEY")))
@@ -99,7 +103,7 @@ class GRPOTrainer:
 
         for _ in range(num_solutions):
             # Generate with sampling
-            with torch.amp.autocast('cuda', enabled=self.config.fp16):
+            with torch.amp.autocast('cuda', enabled=self.use_fp16):
                 output = self.model.generate(
                     prompt_ids,
                     max_new_tokens=self.config.max_new_tokens,
@@ -155,7 +159,7 @@ class GRPOTrainer:
         """
         input_ids = full_ids.unsqueeze(0).to(self.device)  # [1, seq_len]
 
-        with torch.amp.autocast('cuda', enabled=self.config.fp16):
+        with torch.amp.autocast('cuda', enabled=self.use_fp16):
             outputs = model(input_ids=input_ids)
             logits = outputs.logits[0]  # [seq_len, vocab_size]
 

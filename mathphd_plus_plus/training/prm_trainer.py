@@ -86,8 +86,12 @@ def run_prm_training(
     total_steps = len(dataloader) * config.num_train_epochs // config.gradient_accumulation_steps
     scheduler = CosineAnnealingLR(optimizer, T_max=total_steps)
 
-    # Mixed precision scaler
-    scaler = torch.amp.GradScaler('cuda') if config.fp16 else None
+    # Mixed precision scaler — only use if model is in fp32
+    model_dtype = next(model.parameters()).dtype
+    use_fp16 = config.fp16 and model_dtype != torch.float16
+    if not use_fp16 and config.fp16:
+        print(f"  [NOTE] Model is already {model_dtype}, disabling fp16 GradScaler")
+    scaler = torch.amp.GradScaler('cuda') if use_fp16 else None
 
     logger = MetricsLogger(use_wandb=bool(os.environ.get("WANDB_API_KEY")))
 
@@ -112,7 +116,7 @@ def run_prm_training(
         for batch_idx, batch in enumerate(pbar):
             batch = {k: v.to(device) for k, v in batch.items()}
 
-            if config.fp16:
+            if use_fp16:
                 with torch.amp.autocast('cuda'):
                     result = model(
                         input_ids=batch["input_ids"],
@@ -140,7 +144,7 @@ def run_prm_training(
 
             # Gradient accumulation step
             if (batch_idx + 1) % config.gradient_accumulation_steps == 0:
-                if config.fp16:
+                if use_fp16:
                     scaler.step(optimizer)
                     scaler.update()
                 else:
