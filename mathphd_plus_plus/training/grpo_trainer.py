@@ -65,8 +65,8 @@ class GRPOTrainer:
 
         # Mixed precision — only use GradScaler if model is in fp32
         model_dtype = next(self.model.parameters()).dtype
-        self.use_fp16 = self.use_fp16 and model_dtype != torch.float16
-        if not self.use_fp16 and self.use_fp16:
+        self.use_fp16 = self.config.fp16 and model_dtype != torch.float16
+        if not self.use_fp16 and self.config.fp16:
             print(f"  [NOTE] Model is already {model_dtype}, disabling fp16 GradScaler")
         self.scaler = torch.amp.GradScaler('cuda') if self.use_fp16 else None
 

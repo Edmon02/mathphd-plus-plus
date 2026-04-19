@@ -178,7 +178,15 @@ def run_prm_training(
     # Save final model
     final_path = os.path.join(output_dir, "final")
     os.makedirs(final_path, exist_ok=True)
-    torch.save(model.state_dict(), os.path.join(final_path, "prm_model.pt"))
-    print(f"\n[PRM] Final model saved to {final_path}")
+    save_path = os.path.join(final_path, "prm_model.pt")
+    torch.save(model.state_dict(), save_path)
+    # Also save tokenizer for easy reloading
+    tokenizer.save_pretrained(final_path)
+    # Verify file was written
+    if os.path.exists(save_path):
+        size_mb = os.path.getsize(save_path) / 1e6
+        print(f"\n[PRM] Final model saved to {final_path} ({size_mb:.1f} MB)")
+    else:
+        print(f"\n[PRM] WARNING: Save appeared to fail — {save_path} not found!")
 
     return final_path
