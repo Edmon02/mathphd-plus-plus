@@ -112,7 +112,26 @@ def evaluate_math(
     """Evaluate on MATH test set with difficulty and subject breakdown."""
     print("[EVAL] Running MATH evaluation...")
 
-    dataset = load_dataset("hendrycks/competition_math", split="test", cache_dir=cache_dir)
+    # Try multiple dataset sources (hendrycks was removed from HF Hub)
+    dataset = None
+    for dataset_name in ["lighteval/MATH", "HuggingFaceH4/MATH-500", "competition_math"]:
+        try:
+            dataset = load_dataset(dataset_name, split="test", cache_dir=cache_dir, trust_remote_code=True)
+            print(f"[EVAL] Loaded MATH from: {dataset_name}")
+            break
+        except Exception:
+            continue
+
+    if dataset is None:
+        print("[EVAL] WARNING: Could not load MATH dataset, skipping...")
+        return {
+            "benchmark": "math",
+            "accuracy": 0.0,
+            "total": 0,
+            "correct": 0,
+            "results": [],
+            "error": "Dataset not available",
+        }
     if max_samples:
         dataset = dataset.select(range(min(max_samples, len(dataset))))
 

@@ -83,6 +83,9 @@ def run_prm_training(
             hidden_dim=config.reward_head_dim,
         )
 
+    # use_cache is incompatible with gradient checkpointing — disable it first
+    # (the model auto-disables it anyway, but this silences the noisy warning)
+    model.config.use_cache = False
     model.gradient_checkpointing_enable()
     model = model.to(device)
 
