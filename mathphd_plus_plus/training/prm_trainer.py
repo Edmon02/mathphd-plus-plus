@@ -4,6 +4,7 @@ Trains a step-level reward model on Math-Shepherd data.
 """
 
 import os
+import shutil
 import torch
 from typing import Optional
 from transformers import (
@@ -18,6 +19,26 @@ from tqdm import tqdm
 from ..models.reward_model import ProcessRewardModel
 from ..data.collator import PRMDataCollator
 from ..training.callbacks import MetricsLogger
+
+
+def _save_to_drive(state_dict, dest_dir: str, filename: str):
+    """Save model checkpoint reliably to Google Drive.
+
+    Google Drive's FUSE mount in Colab caches writes, so large files
+    may never fully sync. This saves locally first, then copies to Drive.
+    """
+    is_drive = "/content/drive" in dest_dir
+    os.makedirs(dest_dir, exist_ok=True)
+
+    if is_drive:
+        local_tmp = os.path.join("/content", "prm_tmp_save")
+        os.makedirs(local_tmp, exist_ok=True)
+        local_file = os.path.join(local_tmp, filename)
+        torch.save(state_dict, local_file)
+        shutil.copy2(local_file, os.path.join(dest_dir, filename))
+        os.remove(local_file)
+    else:
+        torch.save(state_dict, os.path.join(dest_dir, filename))
 
 
 def run_prm_training(
@@ -167,8 +188,7 @@ def run_prm_training(
 
                 if global_step % config.save_steps == 0:
                     ckpt_path = os.path.join(output_dir, f"checkpoint-{global_step}")
-                    os.makedirs(ckpt_path, exist_ok=True)
-                    torch.save(model.state_dict(), os.path.join(ckpt_path, "prm_model.pt"))
+                    _save_to_drive(model.state_dict(), ckpt_path, "prm_model.pt")
 
         # End of epoch
         avg_loss = epoch_loss / len(dataloader)
@@ -177,12 +197,12 @@ def run_prm_training(
 
     # Save final model
     final_path = os.path.join(output_dir, "final")
-    os.makedirs(final_path, exist_ok=True)
-    save_path = os.path.join(final_path, "prm_model.pt")
-    torch.save(model.state_dict(), save_path)
+    _save_to_drive(model.state_dict(), final_path, "prm_model.pt")
     # Also save tokenizer for easy reloading
     tokenizer.save_pretrained(final_path)
+
     # Verify file was written
+    save_path = os.path.join(final_path, "prm_model.pt")
     if os.path.exists(save_path):
         size_mb = os.path.getsize(save_path) / 1e6
         print(f"\n[PRM] Final model saved to {final_path} ({size_mb:.1f} MB)")
