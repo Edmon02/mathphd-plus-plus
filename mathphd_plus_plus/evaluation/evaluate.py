@@ -23,7 +23,7 @@ def generate_answer(
     temperature: float = 0.0,
     device: str = "cuda",
 ) -> str:
-    """Generate a single answer using greedy decoding."""
+    """Generate a single answer using greedy or sampled decoding."""
     prompt = (
         f"<|im_start|>system\nYou are MathPhD++, an advanced mathematical reasoning assistant. "
         f"Show your complete reasoning step-by-step.<|im_end|>\n"
@@ -32,17 +32,31 @@ def generate_answer(
     )
 
     input_ids = tokenizer.encode(prompt, return_tensors="pt").to(device)
+    attention_mask = torch.ones_like(input_ids)
+
+    eos_ids = [tokenizer.eos_token_id]
+    im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+    if isinstance(im_end_id, int) and im_end_id != tokenizer.unk_token_id:
+        eos_ids.append(im_end_id)
+
+    do_sample = temperature > 0
+    gen_kwargs = dict(
+        input_ids=input_ids,
+        attention_mask=attention_mask,
+        max_new_tokens=max_new_tokens,
+        pad_token_id=tokenizer.pad_token_id,
+        eos_token_id=eos_ids,
+        repetition_penalty=1.2,
+        do_sample=do_sample,
+    )
+    if do_sample:
+        gen_kwargs["temperature"] = temperature
+        gen_kwargs["top_p"] = 0.95
 
     model.eval()
     with torch.no_grad():
         with torch.amp.autocast('cuda'):
-            output = model.generate(
-                input_ids,
-                max_new_tokens=max_new_tokens,
-                temperature=temperature,
-                pad_token_id=tokenizer.pad_token_id,
-                do_sample=temperature > 0,
-            )
+            output = model.generate(**gen_kwargs)
 
     response = tokenizer.decode(output[0][input_ids.size(1):], skip_special_tokens=True)
     return response

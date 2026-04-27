@@ -13,6 +13,7 @@ Algorithm:
 import os
 import copy
 import json
+import math
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -97,20 +98,28 @@ class GRPOTrainer:
         )
 
         prompt_ids = self.tokenizer.encode(prompt, add_special_tokens=False, return_tensors="pt").to(self.device)
+        attention_mask = torch.ones_like(prompt_ids)
         prompt_len = prompt_ids.size(1)
+
+        eos_ids = [self.tokenizer.eos_token_id]
+        im_end_id = self.tokenizer.convert_tokens_to_ids("<|im_end|>")
+        if isinstance(im_end_id, int) and im_end_id != self.tokenizer.unk_token_id:
+            eos_ids.append(im_end_id)
 
         solutions = []
 
         for _ in range(num_solutions):
-            # Generate with sampling
             with torch.amp.autocast('cuda', enabled=self.use_fp16):
                 output = self.model.generate(
                     prompt_ids,
+                    attention_mask=attention_mask,
                     max_new_tokens=self.config.max_new_tokens,
                     temperature=self.config.generation_temperature,
                     top_p=self.config.generation_top_p,
                     do_sample=self.config.generation_do_sample,
                     pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=eos_ids,
+                    repetition_penalty=1.2,
                     return_dict_in_generate=True,
                     output_scores=True,
                 )
@@ -191,21 +200,21 @@ class GRPOTrainer:
         # 1. Generate solutions
         solutions = self.generate_solutions(problem, self.config.group_size)
 
-        # 2. Compute rewards
+        # 2. Compute rewards (with NaN guard)
         rewards = []
         for sol in solutions:
             reward_info = self.reward_fn.compute_reward(sol["text"], ground_truth)
             rewards.append(reward_info)
             sol["reward"] = reward_info
 
-        total_rewards = [r["total"] for r in rewards]
+        total_rewards = [
+            0.0 if math.isnan(r["total"]) else r["total"] for r in rewards
+        ]
 
         # 3. Compute group-normalized advantages
-        mean_r = np.mean(total_rewards)
-        std_r = np.std(total_rewards) + 1e-8
-        advantages = [(r - mean_r) / std_r for r in total_rewards]
+        mean_r = float(np.mean(total_rewards))
+        std_r = float(np.std(total_rewards))
 
-        # Skip if no variance (all same reward)
         if std_r < 1e-6:
             return {
                 "loss": torch.tensor(0.0, device=self.device),
@@ -214,18 +223,18 @@ class GRPOTrainer:
                 "skipped": True,
             }
 
-        # 4. Compute GRPO loss
+        advantages = [(r - mean_r) / (std_r + 1e-8) for r in total_rewards]
+
+        # 4. Compute per-token GRPO loss (standard formulation)
         total_loss = torch.tensor(0.0, device=self.device, requires_grad=True)
 
         for sol, adv in zip(solutions, advantages):
-            # Current policy log probs
             current_log_probs = self.compute_log_probs(
                 self.model,
                 sol["full_ids"],
                 sol["prompt_len"],
             )
 
-            # Reference policy log probs (for KL penalty)
             with torch.no_grad():
                 ref_log_probs = self.compute_log_probs(
                     self.ref_model,
@@ -233,37 +242,47 @@ class GRPOTrainer:
                     sol["prompt_len"],
                 )
 
-            # Old policy log probs (from generation time)
             old_log_probs = sol["old_log_probs"].to(self.device)
 
-            # Ensure same length (might differ due to truncation)
             min_len = min(len(current_log_probs), len(old_log_probs), len(ref_log_probs))
+            if min_len == 0:
+                continue
             current_log_probs = current_log_probs[:min_len]
             old_log_probs = old_log_probs[:min_len]
             ref_log_probs = ref_log_probs[:min_len]
 
-            # Log ratio: log(pi_theta / pi_old)
-            log_ratio = current_log_probs - old_log_probs
-            ratio = torch.exp(log_ratio.sum())  # Product of per-token ratios
+            # Per-token importance ratio with clamped log-ratio (prevents overflow)
+            log_ratio = (current_log_probs - old_log_probs).clamp(-40.0, 40.0)
+            per_token_ratio = torch.exp(log_ratio)
 
-            # Clipped ratio
-            clipped_ratio = torch.clamp(
-                ratio,
-                1 - self.config.clip_epsilon,
-                1 + self.config.clip_epsilon,
+            per_token_clipped = torch.clamp(
+                per_token_ratio,
+                1.0 - self.config.clip_epsilon,
+                1.0 + self.config.clip_epsilon,
             )
 
-            # Policy gradient loss (negative because we maximize reward)
-            adv_tensor = torch.tensor(adv, device=self.device, dtype=torch.float32)
-            pg_loss = -torch.min(ratio * adv_tensor, clipped_ratio * adv_tensor)
+            adv_tensor = torch.tensor(adv, device=self.device, dtype=current_log_probs.dtype)
 
-            # KL penalty
-            kl = (torch.exp(current_log_probs) * (current_log_probs - ref_log_probs)).sum()
+            # Per-token policy gradient loss (averaged over tokens)
+            per_token_loss = -torch.min(
+                per_token_ratio * adv_tensor,
+                per_token_clipped * adv_tensor,
+            )
+            sol_loss = per_token_loss.mean()
 
-            sol_loss = pg_loss + self.config.kl_beta * kl
+            # Stable KL penalty: mean of clamped (current - ref) log-prob differences
+            kl_diff = (current_log_probs - ref_log_probs).clamp(-40.0, 40.0)
+            kl = kl_diff.mean()
+
+            sol_loss = sol_loss + self.config.kl_beta * kl
+
+            # Final NaN guard on the per-solution loss
+            if torch.isnan(sol_loss) or torch.isinf(sol_loss):
+                continue
+
             total_loss = total_loss + sol_loss
 
-        total_loss = total_loss / len(solutions)
+        total_loss = total_loss / max(len(solutions), 1)
 
         return {
             "loss": total_loss,
@@ -345,6 +364,8 @@ class GRPOTrainer:
                 # Gradient step
                 if (problem_idx + 1) % self.config.gradient_accumulation_steps == 0:
                     if self.scaler:
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                         self.scaler.step(self.optimizer)
                         self.scaler.update()
                     else:

@@ -3,6 +3,8 @@ Process Reward Module
 Wrapper for using the PRM at inference time for step-level scoring.
 """
 
+import math
+
 import torch
 from typing import List, Tuple, Optional
 from transformers import AutoTokenizer
@@ -36,7 +38,7 @@ class ProcessRewardScorer:
         """
         steps = [s.strip() for s in solution.split(self.step_delimiter) if s.strip()]
         if not steps:
-            return 0.0, []
+            return 0.5, []
 
         step_scores = []
         prefix = ""
@@ -51,8 +53,13 @@ class ProcessRewardScorer:
                 padding=False,
             ).to(self.device)
 
-            result = self.model(**encoding)
-            score = result["rewards"].item()
+            try:
+                result = self.model(**encoding)
+                score = result["rewards"].item()
+                if math.isnan(score) or math.isinf(score):
+                    score = 0.5
+            except Exception:
+                score = 0.5
             step_scores.append((step, score))
 
         mean_score = sum(s for _, s in step_scores) / len(step_scores)

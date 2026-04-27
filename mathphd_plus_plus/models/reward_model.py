@@ -3,6 +3,8 @@ Process Reward Model
 Qwen2.5-0.5B with a classification head for step-level reward prediction.
 """
 
+import math
+
 import torch
 import torch.nn as nn
 from typing import Optional, Dict
@@ -84,8 +86,12 @@ class ProcessRewardModel(nn.Module):
 
         # Compute reward scores
         reward_logits = self.reward_head(last_hidden).squeeze(-1)  # [batch_size]
+        rewards = torch.sigmoid(reward_logits).clamp(0.0, 1.0)
 
-        result = {"rewards": torch.sigmoid(reward_logits), "logits": reward_logits}
+        # Guard against NaN from degenerate hidden states
+        rewards = torch.where(torch.isnan(rewards), torch.tensor(0.5, device=rewards.device, dtype=rewards.dtype), rewards)
+
+        result = {"rewards": rewards, "logits": reward_logits}
 
         if labels is not None:
             result["loss"] = self.loss_fn(reward_logits, labels)
@@ -106,6 +112,9 @@ class ProcessRewardModel(nn.Module):
         """
         self.eval()
         steps = [s.strip() for s in text.split(step_delimiter) if s.strip()]
+        if not steps:
+            return []
+
         scores = []
 
         prefix = ""
@@ -119,15 +128,22 @@ class ProcessRewardModel(nn.Module):
             ).to(device)
 
             with torch.no_grad():
-                result = self.forward(**encoding)
-                score = result["rewards"].item()
+                try:
+                    result = self.forward(**encoding)
+                    score = result["rewards"].item()
+                    if math.isnan(score) or math.isinf(score):
+                        score = 0.5
+                except Exception:
+                    score = 0.5
 
             scores.append((step, score))
 
         return scores
 
     def gradient_checkpointing_enable(self):
-        """Enable gradient checkpointing on backbone."""
+        """Enable gradient checkpointing on backbone and disable use_cache."""
+        if hasattr(self.transformer, 'config'):
+            self.transformer.config.use_cache = False
         if hasattr(self.transformer, 'gradient_checkpointing_enable'):
             self.transformer.gradient_checkpointing_enable()
 

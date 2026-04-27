@@ -23,10 +23,8 @@ def load_tokenizer(
         padding_side="right",
     )
 
-    # Ensure pad token exists
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-        tokenizer.pad_token_id = tokenizer.eos_token_id
+    if tokenizer.pad_token is None or tokenizer.pad_token == tokenizer.eos_token:
+        tokenizer.add_special_tokens({"pad_token": "<|pad|>"})
 
     # Add special math tokens
     if special_tokens:

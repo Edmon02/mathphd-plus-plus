@@ -5,6 +5,7 @@ Combines correctness, process, and format rewards for GRPO training.
 R_total = w1 * R_correctness + w2 * R_process + w3 * R_format
 """
 
+import math
 import re
 from typing import Dict, Optional
 
@@ -54,8 +55,13 @@ class CompositeReward:
         if self.process_scorer is None:
             return 0.5
 
-        mean_score, _ = self.process_scorer.score_solution(response)
-        return mean_score
+        try:
+            mean_score, _ = self.process_scorer.score_solution(response)
+            if math.isnan(mean_score) or math.isinf(mean_score):
+                return 0.5
+            return max(0.0, min(1.0, mean_score))
+        except Exception:
+            return 0.5
 
     def compute_format_reward(self, response: str) -> float:
         """Compute format compliance reward.
@@ -102,6 +108,10 @@ class CompositeReward:
             self.w_process * r_process +
             self.w_format * r_format
         )
+
+        if math.isnan(total) or math.isinf(total):
+            total = 0.0
+        total = max(0.0, min(1.0, total))
 
         return {
             "total": total,

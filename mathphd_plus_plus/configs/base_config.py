@@ -10,8 +10,8 @@ from typing import Optional, List
 @dataclass
 class ModelConfig:
     """Base model configuration."""
-    model_name: str = "Qwen/Qwen2.5-0.5B"
-    torch_dtype: str = "float32"  # Load in fp32; fp16 mixed precision handled by TrainingArguments
+    model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"
+    torch_dtype: str = "float16"
     use_flash_attention: bool = False  # T4 doesn't support flash-attn2
     gradient_checkpointing: bool = True
     max_seq_length: int = 2048
@@ -62,7 +62,7 @@ class CPTConfig:
 class SFTConfig:
     """Stage 2: Supervised Fine-Tuning configuration."""
     # Data
-    max_seq_length: int = 512
+    max_seq_length: int = 2048
     sft_data_mix: dict = field(default_factory=lambda: {
         "meta-math/MetaMathQA": 40_000,
         "hendrycks/competition_math": -1,  # all 7.5K
@@ -74,11 +74,11 @@ class SFTConfig:
     # Training
     per_device_train_batch_size: int = 2
     gradient_accumulation_steps: int = 8  # effective batch = 16
-    learning_rate: float = 1e-5
+    learning_rate: float = 2e-5
     lr_scheduler_type: str = "cosine"
     warmup_steps: float = 0.03
     weight_decay: float = 0.01
-    num_train_epochs: int = 2
+    num_train_epochs: int = 3
     fp16: bool = True
     bf16: bool = False
 
@@ -95,7 +95,7 @@ class SFTConfig:
 @dataclass
 class PRMConfig:
     """Stage 3: Process Reward Model configuration."""
-    model_name: str = "Qwen/Qwen2.5-0.5B"  # Fresh copy
+    model_name: str = "Qwen/Qwen2.5-0.5B-Instruct"
     reward_head_dim: int = 896  # Qwen2.5-0.5B hidden dim
     max_seq_length: int = 1024
 
@@ -129,8 +129,8 @@ class GRPOConfig:
 
     # GRPO
     clip_epsilon: float = 0.2
-    kl_beta: float = 0.01  # KL penalty coefficient
-    learning_rate: float = 5e-7  # Very low for RL stability
+    kl_beta: float = 0.04  # Stronger KL regularization for stability
+    learning_rate: float = 1e-6
     per_device_train_batch_size: int = 1  # One problem at a time
     gradient_accumulation_steps: int = 8  # Accumulate over 8 problems
     num_grpo_epochs: int = 2
