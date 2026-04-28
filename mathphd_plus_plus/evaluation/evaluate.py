@@ -7,26 +7,66 @@ import os
 import json
 import torch
 from typing import Dict, Optional, List
+from contextlib import nullcontext
 from tqdm import tqdm
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from ..rewards.sympy_verifier import extract_answer_from_response, verify_answer
+from ..data.preprocess_sft import SYSTEM_PROMPT
+from ..rewards.sympy_verifier import (
+    extract_answer_candidates,
+    extract_answer_from_response,
+    verify_answer,
+)
 from .metrics import accuracy, accuracy_by_difficulty, accuracy_by_subject
+
+
+def load_math_eval_dataset(
+    max_samples: Optional[int] = None,
+    cache_dir: str = "./data_cache",
+):
+    """Load a standard-format MATH evaluation dataset without loading-script fallbacks."""
+    dataset = None
+    dataset_name = None
+    load_errors = {}
+
+    # Use MATH-500 for quick runs and the full parquet-backed MATH set otherwise.
+    dataset_candidates = [
+        ("HuggingFaceH4/MATH-500", None),
+        ("DigitalLearningGmbH/MATH-lighteval", "default"),
+    ]
+    if max_samples is None or max_samples > 500:
+        dataset_candidates.reverse()
+
+    for candidate_name, candidate_config in dataset_candidates:
+        try:
+            dataset = load_dataset(
+                candidate_name,
+                candidate_config,
+                split="test",
+                cache_dir=cache_dir,
+            )
+            dataset_name = candidate_name
+            break
+        except Exception as exc:
+            load_errors[candidate_name] = str(exc)
+
+    return dataset, dataset_name, load_errors
 
 
 def generate_answer(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
     problem: str,
-    max_new_tokens: int = 512,
+    max_new_tokens: int = 768,
     temperature: float = 0.0,
+    top_p: float = 0.95,
+    system_prompt: str = SYSTEM_PROMPT,
     device: str = "cuda",
 ) -> str:
     """Generate a single answer using greedy or sampled decoding."""
     prompt = (
-        f"<|im_start|>system\nYou are MathPhD++, an advanced mathematical reasoning assistant. "
-        f"Show your complete reasoning step-by-step.<|im_end|>\n"
+        f"<|im_start|>system\n{system_prompt}<|im_end|>\n"
         f"<|im_start|>user\n{problem}<|im_end|>\n"
         f"<|im_start|>assistant\n"
     )
@@ -51,11 +91,12 @@ def generate_answer(
     )
     if do_sample:
         gen_kwargs["temperature"] = temperature
-        gen_kwargs["top_p"] = 0.95
+        gen_kwargs["top_p"] = top_p
 
     model.eval()
+    autocast_ctx = torch.amp.autocast('cuda') if str(device).startswith('cuda') else nullcontext()
     with torch.no_grad():
-        with torch.amp.autocast('cuda'):
+        with autocast_ctx:
             output = model.generate(**gen_kwargs)
 
     response = tokenizer.decode(output[0][input_ids.size(1):], skip_special_tokens=True)
@@ -66,6 +107,9 @@ def evaluate_gsm8k(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
     max_samples: Optional[int] = None,
+    max_new_tokens: int = 768,
+    temperature: float = 0.0,
+    top_p: float = 0.95,
     device: str = "cuda",
     cache_dir: str = "./data_cache",
 ) -> Dict:
@@ -85,11 +129,20 @@ def evaluate_gsm8k(
         solution = item["answer"]
 
         # Extract ground truth
-        gt = solution.split("####")[-1].strip() if "####" in solution else ""
+        gt = solution.rsplit("####", 1)[-1].strip() if "####" in solution else solution.strip()
 
         # Generate
-        response = generate_answer(model, tokenizer, problem, device=device)
-        pred = extract_answer_from_response(response)
+        response = generate_answer(
+            model,
+            tokenizer,
+            problem,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            device=device,
+        )
+        candidates = extract_answer_candidates(response)
+        pred = candidates[0]["answer"] if candidates else extract_answer_from_response(response)
 
         score, method = verify_answer(pred, gt)
 
@@ -100,7 +153,9 @@ def evaluate_gsm8k(
             "prediction": pred,
             "ground_truth": gt,
             "correct": score > 0.5,
+            "verification_score": score,
             "method": method,
+            "prediction_candidates": candidates,
             "full_response": response,
         })
 
@@ -120,21 +175,19 @@ def evaluate_math(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
     max_samples: Optional[int] = None,
+    max_new_tokens: int = 768,
+    temperature: float = 0.0,
+    top_p: float = 0.95,
     device: str = "cuda",
     cache_dir: str = "./data_cache",
 ) -> Dict:
     """Evaluate on MATH test set with difficulty and subject breakdown."""
     print("[EVAL] Running MATH evaluation...")
 
-    # Try multiple dataset sources (hendrycks was removed from HF Hub)
-    dataset = None
-    for dataset_name in ["lighteval/MATH", "HuggingFaceH4/MATH-500", "competition_math"]:
-        try:
-            dataset = load_dataset(dataset_name, split="test", cache_dir=cache_dir, trust_remote_code=True)
-            print(f"[EVAL] Loaded MATH from: {dataset_name}")
-            break
-        except Exception:
-            continue
+    dataset, dataset_name, load_errors = load_math_eval_dataset(
+        max_samples=max_samples,
+        cache_dir=cache_dir,
+    )
 
     if dataset is None:
         print("[EVAL] WARNING: Could not load MATH dataset, skipping...")
@@ -145,7 +198,10 @@ def evaluate_math(
             "correct": 0,
             "results": [],
             "error": "Dataset not available",
+            "load_errors": load_errors,
         }
+
+    print(f"[EVAL] Loaded MATH from: {dataset_name}")
     if max_samples:
         dataset = dataset.select(range(min(max_samples, len(dataset))))
 
@@ -159,18 +215,25 @@ def evaluate_math(
 
     for item in tqdm(dataset, desc="MATH"):
         problem = item["problem"]
-        solution = item["solution"]
-        level = item.get("level", "Level 3")
-        subject = item.get("type", "unknown")
+        solution = item.get("solution", item.get("answer", ""))
+        level = item.get("level", item.get("difficulty", "Level 3"))
+        subject = item.get("type", item.get("subject", "unknown"))
 
-        # Extract ground truth from \\boxed{}
-        import re
-        gt_match = re.search(r'\\boxed\{([^}]+)\}', solution)
-        gt = gt_match.group(1) if gt_match else ""
+        solution_candidates = extract_answer_candidates(solution)
+        gt = solution_candidates[0]["answer"] if solution_candidates else ""
 
         # Generate
-        response = generate_answer(model, tokenizer, problem, device=device)
-        pred = extract_answer_from_response(response)
+        response = generate_answer(
+            model,
+            tokenizer,
+            problem,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            device=device,
+        )
+        candidates = extract_answer_candidates(response)
+        pred = candidates[0]["answer"] if candidates else extract_answer_from_response(response)
 
         score, method = verify_answer(pred, gt)
 
@@ -183,8 +246,13 @@ def evaluate_math(
             "prediction": pred,
             "ground_truth": gt,
             "correct": score > 0.5,
+            "verification_score": score,
+            "verification_method": method,
             "level": level,
             "subject": subject,
+            "prediction_candidates": candidates,
+            "ground_truth_candidates": solution_candidates,
+            "full_response": response,
         })
 
     acc = accuracy(predictions, ground_truths)
@@ -201,6 +269,7 @@ def evaluate_math(
 
     return {
         "benchmark": "math",
+        "dataset_name": dataset_name,
         "accuracy": acc,
         "total": len(results),
         "correct": sum(1 for r in results if r["correct"]),
@@ -216,6 +285,9 @@ def run_all_evaluations(
     benchmarks: List[str] = None,
     max_samples: Optional[int] = None,
     output_dir: str = "./eval_results",
+    max_new_tokens: int = 768,
+    temperature: float = 0.0,
+    top_p: float = 0.95,
     device: str = "cuda",
 ) -> Dict:
     """Run all evaluation benchmarks and save results."""
@@ -225,11 +297,27 @@ def run_all_evaluations(
     all_results = {}
 
     if "gsm8k" in benchmarks:
-        gsm_results = evaluate_gsm8k(model, tokenizer, max_samples, device)
+        gsm_results = evaluate_gsm8k(
+            model,
+            tokenizer,
+            max_samples=max_samples,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            device=device,
+        )
         all_results["gsm8k"] = gsm_results
 
     if "math" in benchmarks:
-        math_results = evaluate_math(model, tokenizer, max_samples, device)
+        math_results = evaluate_math(
+            model,
+            tokenizer,
+            max_samples=max_samples,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            device=device,
+        )
         all_results["math"] = math_results
 
     # Save results
@@ -245,6 +333,10 @@ def run_all_evaluations(
 
     with open(os.path.join(output_dir, "eval_summary.json"), "w") as f:
         json.dump(summary, f, indent=2, default=str)
+
+    for bench, data in all_results.items():
+        with open(os.path.join(output_dir, f"{bench}_results.json"), "w") as f:
+            json.dump(data, f, indent=2, default=str)
 
     # Print summary table
     print(f"\n{'='*60}")

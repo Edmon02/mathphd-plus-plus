@@ -6,7 +6,6 @@ R_total = w1 * R_correctness + w2 * R_process + w3 * R_format
 """
 
 import math
-import re
 from typing import Dict, Optional
 
 from .sympy_verifier import verify_answer, extract_answer_from_response
@@ -37,31 +36,37 @@ class CompositeReward:
         self,
         response: str,
         ground_truth: str,
-    ) -> float:
+    ) -> Dict[str, object]:
         """Compute correctness reward via SymPy verification.
 
         Returns 1.0 if correct, 0.0 if incorrect.
         """
         predicted = extract_answer_from_response(response)
         score, method = verify_answer(predicted, ground_truth)
-        return score
+        return {
+            "score": score,
+            "method": method,
+            "predicted": predicted,
+            "has_prediction": bool(predicted.strip()),
+        }
 
     def compute_process_reward(self, response: str) -> float:
         """Compute process reward using PRM.
 
         Returns mean step score in [0, 1].
-        If no PRM available, returns 0.5 (neutral).
+        If no PRM is available or scoring fails, returns None so the caller can
+        ignore this term instead of silently injecting a neutral reward.
         """
         if self.process_scorer is None:
-            return 0.5
+            return None
 
         try:
             mean_score, _ = self.process_scorer.score_solution(response)
             if math.isnan(mean_score) or math.isinf(mean_score):
-                return 0.5
+                return None
             return max(0.0, min(1.0, mean_score))
         except Exception:
-            return 0.5
+            return None
 
     def compute_format_reward(self, response: str) -> float:
         """Compute format compliance reward.
@@ -70,20 +75,13 @@ class CompositeReward:
         Returns bonus score in [0, 1].
         """
         score = 0.0
-        checks = {
-            "<thinking>": 0.3,
-            "</thinking>": 0.1,
-            "<answer>": 0.3,
-            "</answer>": 0.1,
-            "<verification>": 0.15,
-            "</verification>": 0.05,
-        }
-
-        for tag, weight in checks.items():
-            if tag in response:
-                score += weight
-
-        return min(score, 1.0)
+        if "<thinking>" in response and "</thinking>" in response:
+            score += 0.3
+        if "<answer>" in response and "</answer>" in response:
+            score += 0.5
+        if "<verification>" in response and "</verification>" in response:
+            score += 0.2
+        return score
 
     def compute_reward(
         self,
@@ -99,15 +97,21 @@ class CompositeReward:
         Returns:
             dict with 'total', 'correctness', 'process', 'format' scores
         """
-        r_correct = self.compute_correctness_reward(response, ground_truth)
+        correctness = self.compute_correctness_reward(response, ground_truth)
         r_process = self.compute_process_reward(response)
         r_format = self.compute_format_reward(response)
 
-        total = (
-            self.w_correct * r_correct +
-            self.w_process * r_process +
-            self.w_format * r_format
-        )
+        weighted_terms = [
+            (self.w_correct, correctness["score"]),
+            (self.w_format, r_format),
+        ]
+        if r_process is not None:
+            weighted_terms.append((self.w_process, r_process))
+
+        total_weight = sum(weight for weight, _ in weighted_terms)
+        total = sum(weight * score for weight, score in weighted_terms)
+        if total_weight > 0:
+            total = total / total_weight
 
         if math.isnan(total) or math.isinf(total):
             total = 0.0
@@ -115,9 +119,14 @@ class CompositeReward:
 
         return {
             "total": total,
-            "correctness": r_correct,
-            "process": r_process,
+            "correctness": correctness["score"],
+            "correctness_method": correctness["method"],
+            "predicted_answer": correctness["predicted"],
+            "has_prediction": correctness["has_prediction"],
+            "process": r_process if r_process is not None else 0.0,
+            "process_available": r_process is not None,
             "format": r_format,
+            "active_reward_weight": total_weight,
         }
 
     def compute_batch_rewards(

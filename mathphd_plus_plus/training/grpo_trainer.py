@@ -215,11 +215,22 @@ class GRPOTrainer:
         mean_r = float(np.mean(total_rewards))
         std_r = float(np.std(total_rewards))
 
+        reward_stats = {
+            "correctness_mean": float(np.mean([r["correctness"] for r in rewards])) if rewards else 0.0,
+            "process_mean": float(np.mean([r["process"] for r in rewards])) if rewards else 0.0,
+            "format_mean": float(np.mean([r["format"] for r in rewards])) if rewards else 0.0,
+            "process_available_rate": float(np.mean([1.0 if r.get("process_available") else 0.0 for r in rewards])) if rewards else 0.0,
+            "unknown_verification_rate": float(np.mean([1.0 if r.get("correctness_method") == "unknown" else 0.0 for r in rewards])) if rewards else 0.0,
+            "empty_prediction_rate": float(np.mean([0.0 if r.get("has_prediction") else 1.0 for r in rewards])) if rewards else 0.0,
+            "reward_std": std_r,
+        }
+
         if std_r < 1e-6:
             return {
                 "loss": torch.tensor(0.0, device=self.device),
                 "mean_reward": mean_r,
                 "rewards": rewards,
+                "reward_stats": reward_stats,
                 "skipped": True,
             }
 
@@ -289,6 +300,7 @@ class GRPOTrainer:
             "mean_reward": mean_r,
             "rewards": rewards,
             "advantages": advantages,
+            "reward_stats": reward_stats,
             "skipped": False,
         }
 
@@ -326,8 +338,10 @@ class GRPOTrainer:
 
         for epoch in range(num_epochs):
             epoch_rewards = []
+            epoch_reward_stats = []
             epoch_correct = 0
             epoch_total = 0
+            epoch_skipped = 0
 
             pbar = tqdm(
                 range(start_idx, min(len(train_dataset), self.config.problems_per_epoch)),
@@ -343,6 +357,7 @@ class GRPOTrainer:
 
                 # Compute GRPO loss
                 result = self.compute_grpo_loss(problem, answer)
+                epoch_reward_stats.append(result.get("reward_stats", {}))
 
                 if not result["skipped"]:
                     loss = result["loss"] / self.config.gradient_accumulation_steps
@@ -353,6 +368,8 @@ class GRPOTrainer:
                         loss.backward()
 
                     accumulated_loss += loss.item() * self.config.gradient_accumulation_steps
+                else:
+                    epoch_skipped += 1
 
                 # Track metrics
                 epoch_rewards.append(result["mean_reward"])
@@ -378,10 +395,24 @@ class GRPOTrainer:
                     if global_step % self.config.logging_steps == 0:
                         avg_reward = np.mean(epoch_rewards[-50:]) if epoch_rewards else 0
                         solve_rate = epoch_correct / epoch_total if epoch_total > 0 else 0
+                        recent_stats = epoch_reward_stats[-50:]
+
+                        def mean_stat(name):
+                            values = [stats.get(name, 0.0) for stats in recent_stats if stats]
+                            return float(np.mean(values)) if values else 0.0
+
                         self.logger.log({
                             "grpo/loss": accumulated_loss / max(global_step, 1),
                             "grpo/mean_reward": avg_reward,
                             "grpo/solve_rate": solve_rate,
+                            "grpo/reward_std": mean_stat("reward_std"),
+                            "grpo/correctness_reward": mean_stat("correctness_mean"),
+                            "grpo/process_reward": mean_stat("process_mean"),
+                            "grpo/format_reward": mean_stat("format_mean"),
+                            "grpo/process_available_rate": mean_stat("process_available_rate"),
+                            "grpo/unknown_verification_rate": mean_stat("unknown_verification_rate"),
+                            "grpo/empty_prediction_rate": mean_stat("empty_prediction_rate"),
+                            "grpo/skipped_rate": epoch_skipped / max(problem_idx - start_idx + 1, 1),
                             "grpo/epoch": epoch + 1,
                             "grpo/problem_idx": problem_idx,
                         }, step=global_step)
@@ -400,7 +431,19 @@ class GRPOTrainer:
             # End of epoch stats
             avg_reward = np.mean(epoch_rewards) if epoch_rewards else 0
             solve_rate = epoch_correct / epoch_total if epoch_total > 0 else 0
-            print(f"\nEpoch {epoch + 1} complete: avg_reward={avg_reward:.4f}, solve_rate={solve_rate:.2%}")
+            all_stats = [stats for stats in epoch_reward_stats if stats]
+
+            def epoch_mean(name):
+                values = [stats.get(name, 0.0) for stats in all_stats]
+                return float(np.mean(values)) if values else 0.0
+
+            print(
+                f"\nEpoch {epoch + 1} complete: avg_reward={avg_reward:.4f}, "
+                f"solve_rate={solve_rate:.2%}, skipped={epoch_skipped}, "
+                f"reward_std={epoch_mean('reward_std'):.4f}, "
+                f"unknown_verify={epoch_mean('unknown_verification_rate'):.2%}, "
+                f"empty_pred={epoch_mean('empty_prediction_rate'):.2%}"
+            )
 
             start_idx = 0  # Reset for next epoch
 

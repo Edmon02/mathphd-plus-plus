@@ -24,6 +24,7 @@ class ProcessRewardModel(nn.Module):
         model_name: str = "Qwen/Qwen2.5-0.5B",
         hidden_dim: int = 896,
         torch_dtype: str = "float16",
+        pos_weight: Optional[float] = None,
     ):
         super().__init__()
 
@@ -50,7 +51,11 @@ class ProcessRewardModel(nn.Module):
         nn.init.zeros_(self.reward_head.bias)
         nn.init.normal_(self.reward_head.weight, std=0.01)
 
-        self.loss_fn = nn.BCEWithLogitsLoss()
+        if pos_weight is not None:
+            pos_weight_tensor = torch.tensor([pos_weight], dtype=dtype)
+            self.loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
+        else:
+            self.loss_fn = nn.BCEWithLogitsLoss()
 
     def forward(
         self,

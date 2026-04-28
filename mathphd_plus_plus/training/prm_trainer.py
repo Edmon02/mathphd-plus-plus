@@ -71,16 +71,28 @@ def run_prm_training(
 
     os.makedirs(output_dir, exist_ok=True)
 
+    labels = [int(item["label"]) for item in train_dataset]
+    positive_count = sum(labels)
+    negative_count = len(labels) - positive_count
+    pos_weight = None
+    if positive_count > 0 and negative_count > 0:
+        pos_weight = negative_count / positive_count
+
     # Initialize model
     if resume_from_checkpoint and os.path.exists(resume_from_checkpoint):
         print(f"[PRM] Resuming from {resume_from_checkpoint}")
-        model = ProcessRewardModel(model_name=config.model_name, hidden_dim=config.reward_head_dim)
+        model = ProcessRewardModel(
+            model_name=config.model_name,
+            hidden_dim=config.reward_head_dim,
+            pos_weight=pos_weight,
+        )
         state = torch.load(os.path.join(resume_from_checkpoint, "prm_model.pt"), map_location="cpu")
         model.load_state_dict(state)
     else:
         model = ProcessRewardModel(
             model_name=config.model_name,
             hidden_dim=config.reward_head_dim,
+            pos_weight=pos_weight,
         )
 
     model.gradient_checkpointing_enable()
@@ -119,6 +131,9 @@ def run_prm_training(
     print(f"\n{'='*60}")
     print(f"Stage 3: Process Reward Model Training")
     print(f"  Dataset: {len(train_dataset)} step examples")
+    print(f"  Label balance: +={positive_count}, -={negative_count}")
+    if pos_weight is not None:
+        print(f"  BCE pos_weight: {pos_weight:.4f}")
     print(f"  Model params: {model.num_parameters() / 1e6:.1f}M")
     print(f"  Batch: {config.per_device_train_batch_size} x {config.gradient_accumulation_steps}")
     print(f"  LR: {config.learning_rate}, Epochs: {config.num_train_epochs}")

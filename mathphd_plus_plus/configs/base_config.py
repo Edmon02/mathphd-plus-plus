@@ -65,7 +65,7 @@ class SFTConfig:
     max_seq_length: int = 2048
     sft_data_mix: dict = field(default_factory=lambda: {
         "meta-math/MetaMathQA": 40_000,
-        "hendrycks/competition_math": -1,  # all 7.5K
+        "DigitalLearningGmbH/MATH-lighteval": -1,  # all 7.5K
         "openai/gsm8k": -1,  # all 7.5K
         "nvidia/OpenMathInstruct-2": 5_000,
         "AI-MO/NuminaMath-CoT": 3_000,
@@ -122,26 +122,26 @@ class GRPOConfig:
     """Stage 4: GRPO with Verifiable Rewards configuration."""
     # Generation
     group_size: int = 4  # G=4 (memory constraint)
-    max_new_tokens: int = 512
+    max_new_tokens: int = 640
     generation_temperature: float = 0.7
     generation_top_p: float = 0.95
     generation_do_sample: bool = True
 
     # GRPO
     clip_epsilon: float = 0.2
-    kl_beta: float = 0.04  # Stronger KL regularization for stability
-    learning_rate: float = 1e-6
+    kl_beta: float = 0.02
+    learning_rate: float = 5e-6
     per_device_train_batch_size: int = 1  # One problem at a time
     gradient_accumulation_steps: int = 8  # Accumulate over 8 problems
-    num_grpo_epochs: int = 2
-    problems_per_epoch: int = 2000
+    num_grpo_epochs: int = 3
+    problems_per_epoch: int = 3000
     fp16: bool = True
     bf16: bool = False
 
     # Reward weights
-    reward_correctness_weight: float = 0.6
-    reward_process_weight: float = 0.3
-    reward_format_weight: float = 0.1
+    reward_correctness_weight: float = 0.8
+    reward_process_weight: float = 0.15
+    reward_format_weight: float = 0.05
 
     # Checkpointing
     save_steps: int = 100
@@ -186,7 +186,7 @@ class EvalConfig:
     benchmarks: List[str] = field(default_factory=lambda: [
         "gsm8k", "math", "aime"
     ])
-    max_new_tokens: int = 512
+    max_new_tokens: int = 768
     temperature: float = 0.0  # Greedy for eval
     batch_size: int = 8
     output_dir: str = "./eval_results"

@@ -38,7 +38,7 @@ class ProcessRewardScorer:
         """
         steps = [s.strip() for s in solution.split(self.step_delimiter) if s.strip()]
         if not steps:
-            return 0.5, []
+            return float("nan"), []
 
         step_scores = []
         prefix = ""
@@ -57,12 +57,13 @@ class ProcessRewardScorer:
                 result = self.model(**encoding)
                 score = result["rewards"].item()
                 if math.isnan(score) or math.isinf(score):
-                    score = 0.5
+                    score = float("nan")
             except Exception:
-                score = 0.5
+                score = float("nan")
             step_scores.append((step, score))
 
-        mean_score = sum(s for _, s in step_scores) / len(step_scores)
+        valid_scores = [score for _, score in step_scores if not math.isnan(score) and not math.isinf(score)]
+        mean_score = float("nan") if not valid_scores else sum(valid_scores) / len(valid_scores)
         return mean_score, step_scores
 
     @torch.no_grad()
@@ -83,8 +84,14 @@ class ProcessRewardScorer:
             padding=False,
         ).to(self.device)
 
-        result = self.model(**encoding)
-        return result["rewards"].item()
+        try:
+            result = self.model(**encoding)
+            score = result["rewards"].item()
+            if math.isnan(score) or math.isinf(score):
+                return float("nan")
+            return score
+        except Exception:
+            return float("nan")
 
     @torch.no_grad()
     def batch_score_prefixes(self, prefixes: List[str]) -> List[float]:
@@ -107,5 +114,14 @@ class ProcessRewardScorer:
             padding=True,
         ).to(self.device)
 
-        result = self.model(**encoding)
-        return result["rewards"].tolist()
+        try:
+            result = self.model(**encoding)
+            scores = []
+            for score in result["rewards"].tolist():
+                if math.isnan(score) or math.isinf(score):
+                    scores.append(float("nan"))
+                else:
+                    scores.append(score)
+            return scores
+        except Exception:
+            return [float("nan")] * len(prefixes)

@@ -8,11 +8,21 @@ from typing import Dict, List
 from datasets import Dataset
 
 
-STEP_DELIMITERS = [
-    "\nStep ", "\n\nStep ", "\nstep ",
-    "\n\n", "\nTherefore", "\nThus",
-    "\nSo,", "\nHence",
-]
+STEP_BLOCK_RE = re.compile(r'(?ms)(Step\s+\d+:.*?)(?=\n\s*Step\s+\d+:|\Z)')
+STEP_START_RE = re.compile(r'(?m)^\s*Step\s+\d+:')
+LABEL_SUFFIX_RE = re.compile(r'\s*([+-])\s*$')
+
+
+def _extract_prompt_prefix(text: str) -> str:
+    """Return the problem statement before the first numbered step."""
+    if not text:
+        return ""
+
+    match = STEP_START_RE.search(text)
+    if not match:
+        return text.strip()
+
+    return text[:match.start()].strip()
 
 
 def parse_math_shepherd(item: Dict) -> List[Dict]:
@@ -24,46 +34,32 @@ def parse_math_shepherd(item: Dict) -> List[Dict]:
 
     Returns list of {input_text, step_text, label} dicts.
     """
-    text = item.get("input", "")
-    label = item.get("label", "")
+    input_text = item.get("input", "")
+    labeled_text = item.get("label", "")
+    prompt_text = _extract_prompt_prefix(input_text or labeled_text)
 
-    if not text:
+    if not labeled_text:
         return []
 
-    # Math-Shepherd uses ки as step delimiter with +/- labels
     steps_with_labels = []
 
-    # Split by step markers
-    parts = re.split(r'(Step \d+:)', text)
+    for step_index, block in enumerate(STEP_BLOCK_RE.findall(labeled_text), start=1):
+        step_block = block.strip()
+        label_match = LABEL_SUFFIX_RE.search(step_block)
+        if label_match is None:
+            continue
 
-    current_text = ""
-    for part in parts:
-        if re.match(r'Step \d+:', part):
-            if current_text.strip():
-                # Check for label markers
-                if "ки" in current_text:
-                    step_text = current_text.split("ки")[0].strip()
-                    # Look for + or - after ки
-                    after_ki = current_text.split("ки")[-1].strip()
-                    lbl = 1 if "+" in after_ki or not after_ki else 0
-                    steps_with_labels.append({
-                        "step_text": step_text,
-                        "label": lbl,
-                    })
-            current_text = part
-        else:
-            current_text += part
+        step_text = step_block[:label_match.start()].rstrip()
+        step_text = re.sub(r'\s*ки\s*$', '', step_text).strip()
+        if not step_text:
+            continue
 
-    # Handle last step
-    if current_text.strip():
-        if "ки" in current_text:
-            step_text = current_text.split("ки")[0].strip()
-            after_ki = current_text.split("ки")[-1].strip()
-            lbl = 1 if "+" in after_ki or not after_ki else 0
-            steps_with_labels.append({
-                "step_text": step_text,
-                "label": lbl,
-            })
+        steps_with_labels.append({
+            "prompt_text": prompt_text,
+            "step_text": step_text,
+            "label": 1 if label_match.group(1) == "+" else 0,
+            "step_index": step_index,
+        })
 
     return steps_with_labels
 
@@ -114,25 +110,39 @@ def prepare_prm_dataset(
         if not steps:
             continue
 
-        # Build cumulative context
-        prefix = ""
+        prompt_text = steps[0].get("prompt_text", "")
+        prefix_parts = [prompt_text] if prompt_text else []
         for step_info in steps:
             step_text = step_info["step_text"]
             label = step_info["label"]
-            prefix += step_text + "\n"
+            prefix_parts.append(step_text)
+            prefix_text = "\n\n".join(part for part in prefix_parts if part).strip()
 
             examples.append({
-                "text": prefix.strip(),
+                "text": prefix_text,
                 "label": label,
-                "num_steps": len(prefix.split("\n")),
+                "num_steps": step_info.get("step_index", len(prefix_parts) - 1),
+                "step_text": step_text,
+                "task": item.get("task", "unknown"),
             })
 
         if len(examples) >= max_samples:
             break
 
     examples = examples[:max_samples]
+    positive = sum(1 for e in examples if e['label'] == 1)
+    negative = sum(1 for e in examples if e['label'] == 0)
+
     print(f"[PRM] Created {len(examples)} step-level examples")
-    print(f"  Positive (correct steps): {sum(1 for e in examples if e['label'] == 1)}")
-    print(f"  Negative (incorrect steps): {sum(1 for e in examples if e['label'] == 0)}")
+    print(f"  Positive (correct steps): {positive}")
+    print(f"  Negative (incorrect steps): {negative}")
+
+    if not examples:
+        raise ValueError("PRM preprocessing produced no training examples.")
+    if positive == 0 or negative == 0:
+        raise ValueError(
+            "PRM preprocessing produced a degenerate label distribution. "
+            f"Positive={positive}, Negative={negative}."
+        )
 
     return Dataset.from_list(examples)
